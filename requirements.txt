@@ -1,5 +1,1 @@
 requests
-dolibarr
-dolipy
-dolibarrpy
-icecream
