@@ -1,0 +1,11 @@
+sync_fresh2dolib = true
+sync_dolib2fresh = true
+demo_log_details = true
+demo_items_limit = 10
+demo_offline_input = true
+demo_offline_output = false
+db_dolib_key = 'y8ekqpBnZ7G781Jv0ZK2aXt2P1YOT5rs'
+db_fresh_key = '6vH4RYbZvNTkE75M2WsviF1E80y7jks8'
+db_dolib_req_url = 'https://1cfresh.com/a/ea/2761709/ru/odata/standard.odata'
+db_fresh_req_url = 'https://crm.himopt71.ru/api/index.php'
+db_all_add_delay = 1
