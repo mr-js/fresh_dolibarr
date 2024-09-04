@@ -1,5 +1,5 @@
 {
-    "odata.metadata": "https://msk1.1cfresh.com:443/a/ea/3023505/ru_RU/odata/standard.odata/$metadata#Catalog_КонтактныеЛица",
+    "odata.metadata": "https://1cfresh.com:443/a/ea/3042735/ru/odata/standard.odata/$metadata#Catalog_КонтактныеЛица",
     "value": [
         {
             "Ref_Key": "fd2ce8ba-6612-11ef-8e14-fa163eb4f3b4",
@@ -128,7 +128,7 @@
         },
         {
             "Ref_Key": "91a986d8-6843-11ef-8e14-fa163eb4f3b4",
-            "DataVersion": "AAAAAAAAAAI=",
+            "DataVersion": "AAAAAAAAAAA=",
             "DeletionMark": false,
             "Code": "00-000170",
             "Description": "Михнов, Генеральный Директор",
@@ -238,7 +238,7 @@
         },
         {
             "Ref_Key": "f41c57b4-6915-11ef-8e14-fa163eb4f3b4",
-            "DataVersion": "AAAAAAAAAAE=",
+            "DataVersion": "AAAAAAAAAAA=",
             "DeletionMark": false,
             "Code": "00-000173",
             "Description": "Пироговский, Генеральный Директор",

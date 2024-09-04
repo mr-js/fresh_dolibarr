@@ -17,7 +17,7 @@ class FreshDolibarr:
                     logging.StreamHandler(),
                     logging.FileHandler('fresh_dolibar.log', 'w', 'utf-8')
                     ],
-            format='%(asctime)s %(levelname)s %(message)s [%(funcName)s]',
+            format='%(asctime)s [%(funcName)s] %(levelname)s %(message)s',
             datefmt='%Y.%m.%d %H:%M:%S',
             level=logging.INFO
             )    
@@ -31,14 +31,15 @@ class FreshDolibarr:
         except Exception as e:
             self.log.error(f'CONFIG: {str(e)}')    
         self.log.info('STARTED')
-        self.log.info(f'{self.sync_dir_fresh2dolib=}, {self.sync_dir_dolib2fresh=}')
         self.log.info(f'{self.log_details=}, {self.demo_limit=}, {self.demo_input=}, {self.demo_output=}')
         self.sync_key_dolib = keyring.get_password('fresh_dolibar', 'sync_key_dolib')
         self.sync_key_fresh = keyring.get_password('fresh_dolibar', 'sync_key_fresh')
+        self.data = {}
+        self.state = {}
  
 
     def db_all_dumps(self):
-        items = ['db_dolib_contacts', 'db_dolib_thirdparties', 'db_fresh_contacts', 'db_fresh_thirdparties']
+        items = ['db_dolib_contacts', 'db_dolib_companies', 'db_fresh_contacts', 'db_fresh_companies']
         if not self.demo_input and any(filter(lambda x: not os.path.exists(os.path.join('data', x + '.json')), items)):
             if not os.path.exists('data'):
                 os.mkdir('data')
@@ -46,22 +47,21 @@ class FreshDolibarr:
                 with codecs.open(os.path.join('data', item + '.json'), 'w', 'utf-8') as f:
                     json.dump(eval(f'self.{item}'), f, indent=4, ensure_ascii=False)
             self.log.warning(f'Updated dumps for: {items}')
-        else:
-            self.log.warning(f'Updating dumps for: {items} passed')
 
 
     def db_dolib_scan(self):
+        src = 'dolib'
         if self.demo_input:
             try:
-                items = ['db_dolib_contacts', 'db_dolib_thirdparties']
+                items = ['db_dolib_contacts', 'db_dolib_companies']
                 for item in items:
                     with codecs.open(os.path.join('data', item + '.json'), 'r', 'utf-8') as f:
                         exec(f'self.{item} = json.load(f)')
-                self.log.info('DEMO contacts scan OK')
-                self.log.info('DEMO thirdparties scan OK')
+                self.log.info('contacts readed')
+                self.log.info('companies readed')
             except Exception as e:
                 self.db_dolib_contacts = {}
-                self.db_dolib_thirdparties = {}                
+                self.db_dolib_companies = {}                
                 self.log.error(str(e).replace('\n', ' '))
         else:
             try:
@@ -71,9 +71,9 @@ class FreshDolibarr:
                     'DOLAPIKEY': self.sync_key_dolib
                 }            
                 response = requests.get(url, headers=headers)
-                self.log.debug(f'{response.text=}')
+                # self.log.debug(f'{response.text=}')
                 self.db_dolib_contacts = response.json()
-                self.log.info('contacts scan OK')
+                self.log.info('contacts readed')
             except Exception as e:
                 self.db_dolib_contacts = {}
                 self.log.error(str(e).replace('\n', ' '))
@@ -84,25 +84,70 @@ class FreshDolibarr:
                     'DOLAPIKEY': self.sync_key_dolib
                 }
                 response = requests.get(url, headers=headers)
-                self.db_dolib_thirdparties = response.json()
-                self.log.info('thirdparties scan OK')
+                self.db_dolib_companies = response.json()
+                self.log.info('companies readed')
             except Exception as e:
-                self.db_dolib_thirdparties = {}
+                self.db_dolib_companies = {}
                 self.log.error(str(e).replace('\n', ' '))
+        self.state['dolib'] = {'total': 0, 'extracted': 0, 'passed': 0}
+        for company in self.db_dolib_companies:
+            self.state['dolib'].update({'total': self.state['dolib'].get('total') + 1})
+            id = token_hex(4)        
+            company_internal_id = company.get('id', '')
+            inn = company.get('idprof2', '')
+            name = company.get('name', '')
+            self.log.debug(f'company {name} {inn} "{src}" #{id} scanning...')
+            contacts = next(iter(list(filter(lambda x: x.get('id') == company_internal_id or x.get('socid') == company_internal_id, self.db_dolib_contacts))), None)
+            if company.get('idprof2', '') and contacts:
+                result = {
+                    'src': src,
 
+                    'company_name': company.get('name', ''),
+                    'company_inn': company.get('idprof2', ''),
+                    'company_type': '2' if company.get('fournisseur', '') == '1' else ('1' if company.get('client', '') == '1' else '0'),                    
+                    'company_ogrn': company.get('idprof1', ''),
+                    'company_kpp': company.get('idprof3', ''),
+                    'company_okpo': company.get('idprof4', ''),
+                    'company_country': company.get('country_code', ''),
+                    'company_town': company.get('town', ''),
+                    'company_address': company.get('address', ''),
+                    'company_zip': company.get('zip', ''),
+                    'company_phone': company.get('phone_1', ''),
+                    'company_email': company.get('email_1', ''),
+                    'company_internal_id': company_internal_id,
+
+                    'contact_lastname': contacts.get('lastname', ''),
+                    'contact_firstname': contacts.get('firstname', ''),
+                    'contact_post': contacts.get('poste', ''),
+                    'contact_email': contacts.get('email', ''),
+                    'contact_mobile': contacts.get('phone_mobile', ''),
+                    'contact_phone': contacts.get('phone_pro', ''),
+                    'contact_internal_id': contacts.get('id', ''),      
+                }
+                self.data.update({id : result})
+                self.state['dolib'].update({'extracted': self.state['dolib'].get('extracted') + 1})
+                self.log.debug(f'company {name} {inn} "{src}" extracted')
+            else:
+                self.state['dolib'].update({'passed': self.state['dolib'].get('passed') + 1})
+                self.log.debug(f'company {name} {inn} "{src}" passed (no INN or Contacts)')
+            if self.demo_limit > 0 and self.state['dolib'].get('total') >= self.demo_limit:
+                self.log.warning(f'Limit: {self.demo_limit} items max')
+                break
+    
 
     def db_fresh_scan(self):
+        src = 'fresh'
         if self.demo_input:
             try:
-                items = ['db_fresh_contacts', 'db_fresh_thirdparties']
+                items = ['db_fresh_contacts', 'db_fresh_companies']
                 for item in items:
                     with codecs.open(os.path.join('data', item + '.json'), 'r', 'utf-8') as f:
                         exec(f'self.{item} = json.load(f)')
-                self.log.info('DEMO contacts scan OK')
-                self.log.info('DEMO thirdparties scan OK')
+                self.log.info('contacts readed')
+                self.log.info('companies readed')
             except Exception as e:
                 self.db_fresh_contacts = {}
-                self.db_fresh_thirdparties = {}          
+                self.db_fresh_companies = {}          
                 self.log.error(str(e).replace('\n', ' '))
         else:        
             try:
@@ -116,7 +161,7 @@ class FreshDolibarr:
                 user, password = 'odata.user', self.sync_key_fresh
                 response = requests.get(url, headers=headers, params=params, auth=HTTPBasicAuth(user, password))
                 self.db_fresh_contacts = response.json()
-                self.log.info('contacts scan OK')
+                self.log.info('contacts readed')
             except Exception as e:
                 self.db_fresh_contacts = {}
                 self.log.error(str(e).replace('\n', ' '))
@@ -130,117 +175,67 @@ class FreshDolibarr:
                 }
                 user, password = 'odata.user', self.sync_key_fresh
                 response = requests.get(url, headers=headers, params=params, auth=HTTPBasicAuth(user, password))
-                self.db_fresh_thirdparties = response.json()
-                self.log.info('thirdparties scan OK')
+                self.db_fresh_companies = response.json()
+                self.log.info('companies readed')
             except Exception as e:
-                self.db_fresh_thirdparties = {}
+                self.db_fresh_companies = {}
                 self.log.error(str(e).replace('\n', ' '))
-
-
-    def db_dolib_analize(self):
-        self.db_dolib_result = {}
-        self.db_dolib_analize_statistics = {'processed': 0, 'added': 0, 'passed': 0}
-        for thirdparty in self.db_dolib_thirdparties:
-            self.db_dolib_analize_statistics.update({'processed': self.db_dolib_analize_statistics.get('processed') + 1})
-            id = thirdparty.get('id', '')
-            inn = thirdparty.get('idprof2', '')
-            self.log.debug(f'company #{id} {thirdparty} analizing...')
-            thirdparty_potential_contacts = list(filter(lambda x: x.get('id') == id or x.get('socid') == id, self.db_dolib_contacts))
-            thirdparty_potential_conflicts = list(filter(lambda x: x.get('company_id') == inn, self.db_dolib_result.values()))
-            thirdparty_potential_exists = list(filter(lambda x: x.get('idprof2') == inn, self.db_dolib_thirdparties))
-            self.log.debug(f'{len(thirdparty_potential_contacts)=}, {len(thirdparty_potential_conflicts)=}, {len(thirdparty_potential_exists)=}')
-            if thirdparty.get('idprof2', '') and len(thirdparty_potential_contacts) > 0:
-                self.log.debug(f'company #{id} {thirdparty} added')
-                contacts = thirdparty_potential_contacts[0]
+        self.state['fresh'] = {'total': 0, 'extracted': 0, 'passed': 0}
+        for company in self.db_fresh_companies.get('value'):
+            self.state['fresh'].update({'total': self.state['fresh'].get('total') + 1})
+            id = token_hex(4)
+            company_internal_id, name, ref = company.get('Ref_Key', ''), company.get('НаименованиеПолное', ''), company.get('ОсновноеКонтактноеЛицо_Key', '')
+            inn = company.get('ИНН', '')
+            name = company.get('НаименованиеПолное', '')
+            self.log.debug(f'company {name} {inn} "{src}" #{id} scanning...')
+            contacts = next(iter(list(filter(lambda x: x.get('ОбъектВладелец') == company_internal_id, self.db_fresh_contacts.get('value')))), None)  
+            if company.get('ИНН', '') and contacts:
                 result = {
-                    'company_id': token_hex(4),
-                    'company_type': '2' if thirdparty.get('fournisseur', '') == '1' else ('1' if thirdparty.get('client', '') == '1' else '0'),
-                    'company_name': thirdparty.get('name', ''),
-                    'company_ogrn': thirdparty.get('idprof1', ''),
-                    'company_inn': thirdparty.get('idprof2', ''),
-                    'company_kpp': thirdparty.get('idprof3', ''),
-                    'company_okpo': thirdparty.get('idprof4', ''),
-                    'company_country': thirdparty.get('country_code', ''),
-                    'company_town': thirdparty.get('town', ''),
-                    'company_address': thirdparty.get('address', ''),
-                    'company_zip': thirdparty.get('zip', ''),
-                    'company_phone': thirdparty.get('phone_1', ''),
-                    'company_email': thirdparty.get('email_1', ''),
-                    'contact_lastname': contacts.get('lastname', ''),
-                    'contact_firstname': contacts.get('firstname', ''),
-                    'contact_post': contacts.get('poste', ''),
-                    'contact_email': contacts.get('email', ''),
-                    'contact_mobile': contacts.get('phone_mobile', ''),
-                    'contact_phone': contacts.get('phone_pro', ''),
-                }
-                self.db_dolib_result.update({self.db_dolib_analize_statistics.get('processed') : result})
-                self.db_dolib_analize_statistics.update({'added': self.db_dolib_analize_statistics.get('added') + 1})
-                self.log.debug(f'{result=}')
-            else:
-                self.log.debug(f'company #{id} {thirdparty} passed')
-                self.db_dolib_analize_statistics.update({'passed': self.db_dolib_analize_statistics.get('passed') + 1})
-            if self.demo_limit > 0 and self.db_dolib_analize_statistics.get('processed') >= self.demo_limit:
-                self.log.warning(f'DEMO Limit: {self.demo_limit} items max')
-                break
-        self.log.debug(f'{self.db_dolib_result=}')
-        self.log.info(f'{self.db_dolib_analize_statistics=}')
+                    'src': src,
 
+                    'company_name': company.get('НаименованиеПолное', ''),
+                    'company_inn': company.get('ИНН', ''),
+                    'company_type': '2' if company.get('Parent_Key', '') == "7f5cb650-639b-11ef-8f80-fa163eb4f3b4" else '1',                                    
+                    'company_ogrn': company.get('РегистрационныйНомер', ''),
+                    'company_kpp': company.get('КПП', ''),
+                    'company_okpo': company.get('КодПоОКПО', ''),
+                    'company_country': company.get('Страна', ''),
+                    'company_town': company.get('Город,населённый пункт', ''),
+                    'company_address': company.get('Адрес', ''),
+                    'company_zip': company.get('Индекс', ''),
+                    'company_phone': company.get('НомерТелефона', ''),
+                    'company_email': company.get('АдресЭП', ''),
+                    'company_internal_id': company_internal_id,
 
-    def db_fresh_analize(self):
-        self.db_fresh_result = {}
-        self.db_fresh_analize_statistics = {'processed': 0, 'added': 0, 'passed': 0}
-        for thirdparty in self.db_fresh_thirdparties.get('value'):
-            self.db_fresh_analize_statistics.update({'processed': self.db_fresh_analize_statistics.get('processed') + 1})
-            id, name, ref = thirdparty.get('Ref_Key', ''), thirdparty.get('НаименованиеПолное', ''), thirdparty.get('ОсновноеКонтактноеЛицо_Key', '')
-            inn = thirdparty.get('ИНН', '')
-            self.log.debug(f'company #{id} {thirdparty} analizing...')
-            thirdparty_potential_contacts = list(filter(lambda x: x.get('ОбъектВладелец') == id, self.db_fresh_contacts.get('value')))
-            thirdparty_potential_conflicts = list(filter(lambda x: x.get('company_id') == inn, self.db_fresh_result.values()))
-            thirdparty_potential_exists = list(filter(lambda x: x.get('ИНН') == inn, self.db_fresh_thirdparties.get('value')))
-            self.log.debug(f'{len(thirdparty_potential_contacts)=}, {len(thirdparty_potential_conflicts)=}, {len(thirdparty_potential_exists)=}')            
-            if thirdparty.get('ИНН', '') and len(thirdparty_potential_contacts) > 0:
-                self.log.debug(f'company #{id} {thirdparty} added')
-                contacts = thirdparty_potential_contacts[0]
-                result = {
-                    'company_id': token_hex(4),
-                    'company_type': '2' if thirdparty.get('Parent_Key', '') == "7f5cb650-639b-11ef-8f80-fa163eb4f3b4" else '1',
-                    'company_name': thirdparty.get('НаименованиеПолное', ''),
-                    'company_ogrn': thirdparty.get('РегистрационныйНомер', ''),
-                    'company_inn': thirdparty.get('ИНН', ''),
-                    'company_kpp': thirdparty.get('КПП', ''),
-                    'company_okpo': thirdparty.get('КодПоОКПО', ''),
-                    'company_country': thirdparty.get('Страна', ''),
-                    'company_town': thirdparty.get('Город,населённый пункт', ''),
-                    'company_address': thirdparty.get('Адрес', ''),
-                    'company_zip': thirdparty.get('Индекс', ''),
-                    'company_phone': thirdparty.get('НомерТелефона', ''),
-                    'company_email': thirdparty.get('АдресЭП', ''),
                     'contact_lastname': contacts.get('Фамилия', ''),
                     'contact_firstname': contacts.get('Имя', ''),
                     'contact_post': contacts.get('Должность', ''),
                     'contact_email': contacts.get('КонтактнаяИнформация')[0].get('АдресЭП', '') if contacts.get('КонтактнаяИнформация') else '',
                     'contact_mobile': contacts.get('КонтактнаяИнформация')[0].get('НомерТелефона', '') if contacts.get('КонтактнаяИнформация') else '',
                     'contact_phone': contacts.get('КонтактнаяИнформация')[0].get('НомерТелефона', '')  if contacts.get('КонтактнаяИнформация') else '',
+                    'contact_internal_id': contacts.get('КонтактнаяИнформация')[0].get('Ref_Key', ''),                     
                 }
-                self.db_fresh_result.update({self.db_fresh_analize_statistics.get('processed') : result})
-                self.db_fresh_analize_statistics.update({'added': self.db_fresh_analize_statistics.get('added') + 1})
-                self.log.debug(f'{result=}')
+                self.log.debug(f'company {name} {inn} "{src}" extracted')
+                self.data.update({id : result})
+                self.state['fresh'].update({'extracted': self.state['fresh'].get('extracted') + 1})
             else:
-                self.log.debug(f'company #{id} {thirdparty} passed')
-                self.db_fresh_analize_statistics.update({'passed': self.db_fresh_analize_statistics.get('passed') + 1})
-            if self.demo_limit > 0 and self.db_fresh_analize_statistics.get('processed') >= self.demo_limit:
-                self.log.warning(f'DEMO Limit: {self.demo_limit} items max')
+                self.state['fresh'].update({'passed': self.state['fresh'].get('passed') + 1})
+                self.log.debug(f'company {name} {inn} "{src}" passed (no INN or Contacts)')
+            if self.demo_limit > 0 and self.state['fresh'].get('total') >= self.demo_limit:
+                self.log.warning(f'demo limit: {self.demo_limit} items max')
                 break
-        self.log.debug(f'{self.db_fresh_result=}')
-        self.log.info(f'{self.db_fresh_analize_statistics=}')
 
 
-    def db_dolib_add(self, item):
-        thirdparty_record_id = ''; contact_record_id = ''
-        id = item.get('company_id', '')
+    def db_dolib_write(self, item, company_update='', contact_update=''):
+        if self.demo_output:
+            self.log.warning('DEMO')
+            return '!', '!'
+        company_record_id = ''; contact_record_id = ''
+        id = item.get('id', '')
         inn = item.get('company_inn', '')
+        name = item.get('company_name', '')
         try:
-            url = f'{self.sync_url_dolib}/thirdparties'
+            url = f'{self.sync_url_dolib}/thirdparties' if not company_update else f'{self.sync_url_dolib}/thirdparties/{company_update}'         
             headers = {
                 'Content-Type': 'application/json',
                 'DOLAPIKEY': self.sync_key_dolib
@@ -260,20 +255,21 @@ class FreshDolibarr:
                 'client': '1' if (item.get('company_type', '') == '1' or item.get('company_type', '') == '0') else '0',
                 'fournisseur': '1' if (item.get('company_type', '') == '2'  or item.get('company_type', '') == '0') else '0',
                 'country_id': '19',
-            }   
-            if self.demo_output:
-                thirdparty_record_id = '0'
-                self.log.debug(f'DEMO thirdparty #{thirdparty_record_id} {data} added OK')
+            }               
+            if company_update:
+                response = requests.put(url, headers=headers, json=data)
             else:
                 response = requests.post(url, headers=headers, json=data)
-                if response.status_code == 200 or response.status_code == 201:
-                    thirdparty_record_id = response.text
-                    self.log.info(f'thirdparty #{thirdparty_record_id} {data} added OK')                  
+            if response.status_code == 200 or response.status_code == 201:
+                company_record_id = response.json().get('id')
+                self.log.info(f'company writed ({company_record_id})')
+            else:
+                raise Exception(response.text)                                  
         except Exception as e:
-            self.db_dolib_thirdparties = {}
-            self.log.error(str(e).replace('\n', ' '))
+            # self.db_dolib_companies = {}
+            self.log.warning(str(e).replace('\n', ' '))
         try:
-            url = f'{self.sync_url_dolib}/contacts'
+            url = f'{self.sync_url_dolib}/contacts' if not contact_update else f'{self.sync_url_dolib}/contacts/{contact_update}'
             headers = {
                 'Content-Type': 'application/json',
                 'DOLAPIKEY': self.sync_key_dolib
@@ -286,31 +282,35 @@ class FreshDolibarr:
                 'phone_mobile': item.get('contact_mobile', ''),
                 'phone_pro': item.get('contact_phone', ''),
                 'socname': item.get('company_name', ''),   
-                'socid': thirdparty_record_id,
-                'fk_soc': thirdparty_record_id,
+                'socid': company_record_id,
+                'fk_soc': company_record_id,
             }
-            if self.demo_output:
-                contact_record_id = '0'
-                self.log.debug(f'DEMO contact #{contact_record_id} {data} added OK')
+            response = requests.post(url, headers=headers, json=data)
+            if contact_update:
+                response = requests.put(url, headers=headers, json=data)
             else:
                 response = requests.post(url, headers=headers, json=data)
-                if response.status_code == 200 or response.status_code == 201:
-                    contact_record_id = response.text
-                    self.log.info(f'contact #{contact_record_id} {data} added OK')
-                else:
-                    raise Exception(response.text)
+            if response.status_code == 200 or response.status_code == 201:
+                contact_record_id = response.json()
+                self.log.info(f'contact writed ({contact_record_id})')
+            else:
+                raise Exception(response.text)
         except Exception as e:
-            self.db_dolib_contacts = {}
-            self.log.error(str(e).replace('\n', ' '))            
-        return thirdparty_record_id, contact_record_id
+            # self.db_dolib_contacts = {}
+            self.log.warning(str(e).replace('\n', ' '))            
+        return company_record_id, contact_record_id
         
 
-    def db_fresh_add(self, item):
-        thirdparty_record_id = ''; contact_record_id = ''
-        id = item.get('company_id', '')
+    def db_fresh_write(self, item, company_update='', contact_update=''):
+        if self.demo_output:
+            self.log.warning('DEMO')
+            return '!', '!'        
+        company_record_id = ''; contact_record_id = ''
+        id = item.get('id', '')
         inn = item.get('company_inn', '')
+        name = item.get('company_name', '')        
         try:
-            url = f'{self.sync_url_fresh}/Catalog_КонтактныеЛица'
+            url = f'{self.sync_url_fresh}/Catalog_КонтактныеЛица(guid\'{company_update}\')' if contact_update else f'{self.sync_url_fresh}/Catalog_КонтактныеЛица'
             headers = {
                 'Content-Type': 'application/json'
             }
@@ -325,22 +325,22 @@ class FreshDolibarr:
                 'Телефон мобильный': item.get('contact_mobile', ''),
                 'Телефон рабочий': item.get('contact_phone', ''),                         
             }
-            if self.demo_output:
-                contact_record_id = '0'
-                self.log.debug(f'DEMO contact #{contact_record_id} {data} added OK')
-            else:            
-                user, password = 'odata.user', self.sync_key_fresh
+            user, password = 'odata.user', self.sync_key_fresh
+            response = requests.post(url, headers=headers, params=params, json=data, auth=HTTPBasicAuth(user, password))
+            if contact_update:
+                response = requests.put(url, headers=headers, params=params, json=data, auth=HTTPBasicAuth(user, password))
+            else:
                 response = requests.post(url, headers=headers, params=params, json=data, auth=HTTPBasicAuth(user, password))
-                if response.status_code == 200 or response.status_code == 201:
-                    contact_record_id = response.json().get('Ref_Key')
-                    self.log.info(f'contact #{contact_record_id} {data} added OK')
-                else:
-                    raise Exception(response.text)
+            if response.status_code == 200 or response.status_code == 201:
+                contact_record_id = response.json().get('Ref_Key')
+                self.log.info(f'contact writed ({contact_record_id})')
+            else:
+                raise Exception(response.text)
         except Exception as e:
-            self.db_fresh_contacts = {}
-            self.log.error(str(e).replace('\n', ' '))
+            # self.db_fresh_contacts = {}
+            self.log.warning(str(e).replace('\n', ' '))
         try:
-            url = f'{self.sync_url_fresh}/Catalog_Контрагенты'
+            url = f'{self.sync_url_fresh}/Catalog_Контрагенты(guid\'{company_update}\')' if company_update else f'{self.sync_url_fresh}/Catalog_Контрагенты'
             headers = {
                 'Content-Type': 'application/json'
             }
@@ -361,67 +361,54 @@ class FreshDolibarr:
                 'НомерТелефона': item.get('company_phone', ''),
                 'Email': item.get('company_email', ''),
                 'ОсновноеКонтактноеЛицо_Key': contact_record_id         
-            }
-            if self.demo_output:
-                thirdparty_record_id = '0'
-                self.log.debug(f'DEMO thirdparty #{thirdparty_record_id} {data} added OK')
-            else:            
-                user, password = 'odata.user', self.sync_key_fresh
+            }  
+            user, password = 'odata.user', self.sync_key_fresh
+            if company_update:
+                response = requests.put(url, headers=headers, params=params, json=data, auth=HTTPBasicAuth(user, password))
+            else:
                 response = requests.post(url, headers=headers, params=params, json=data, auth=HTTPBasicAuth(user, password))
-                if response.status_code == 200 or response.status_code == 201:
-                    thirdparty_record_id = response.json().get('Ref_Key')
-                    self.log.info(f'thirdparty #{thirdparty_record_id} {data} added OK')
-                else:
-                    raise Exception(response.text)
+            if response.status_code == 200 or response.status_code == 201:
+                company_record_id = response.json().get('Ref_Key')
+                self.log.info(f'company writed ({contact_record_id})')
+            else:
+                raise Exception(response.text)
         except Exception as e:
-            self.db_fresh_thirdparties = {}
-            self.log.error(str(e).replace('\n', ' '))
-        return thirdparty_record_id, contact_record_id
+            # self.db_fresh_companies = {}
+            self.log.warning(str(e).replace('\n', ' '))
+        return company_record_id, contact_record_id
 
     
     def db_all_sync(self):
-        self.db_all_sync_statistics = {'processed': 0, 'added db_fresh => db_dolib': 0, 'added db_dolib => db_fresh': 0, 'passed': 0}
-        if self.sync_dir_fresh2dolib:
-            try:
-                self.log.debug('sync fresh => dolib ...')
-                for item in self.db_fresh_result.values():
-                    id = item.get('company_id', '')
-                    inn = item.get('company_inn', '')
-                    self.log.debug(f'company #{id} {item} analizing...')                
-                    item_potential = list(filter(lambda x: x[1].get('company_inn') == item.get('company_inn'), self.db_dolib_result.items()))
-                    if len(item_potential) == 0:
-                        self.db_dolib_add(item)
-                        self.log.debug('added db_fresh => db_dolib')
-                        self.db_all_sync_statistics.update({'added db_fresh => db_dolib': self.db_all_sync_statistics.get('added db_fresh => db_dolib') + 1})
-                    else:
-                        self.log.debug('passed (found in db_dolib)')
-                        self.db_all_sync_statistics.update({'passed': self.db_all_sync_statistics.get('passed') + 1})
-                    self.db_all_sync_statistics.update({'processed': self.db_all_sync_statistics.get('processed') + 1})
-                    if not self.demo_output:
-                        time.sleep(self.sync_requests_delay)
-            except Exception as e:
-                self.log.error(str(e).replace('\n', ' '))
-        if self.sync_dir_dolib2fresh:                
-            try:                                
-                self.log.debug('sync dolib => fresh ...')
-                for item in self.db_dolib_result.values():
-                    id = item.get('company_id', '')
-                    inn = item.get('company_inn', '')
-                    self.log.debug(f'company #{id} {item} analizing...')
-                    item_potential = list(filter(lambda x: x[1].get('company_inn') == item.get('company_inn'), self.db_fresh_result.items()))
-                    if len(item_potential) == 0:
-                        self.db_fresh_add(item)
-                        self.log.debug('added db_dolib => db_fresh')
-                        self.db_all_sync_statistics.update({'added db_dolib => db_fresh': self.db_all_sync_statistics.get('added db_dolib => db_fresh') + 1})
-                    else:
-                        self.log.debug('passed (found in db_fresh)')
-                        self.db_all_sync_statistics.update({'passed': self.db_all_sync_statistics.get('passed') + 1})
-                    self.db_all_sync_statistics.update({'processed': self.db_all_sync_statistics.get('processed') + 1})
-                    if not self.demo_output:
-                        time.sleep(self.sync_requests_delay)
-            except Exception as e:
-                self.log.error(str(e).replace('\n', ' '))
-        self.log.info(f'{self.db_all_sync_statistics=}')
+        self.state['sync'] = {'total': 0, 'fresh => dolib': 0, 'dolib => fresh': 0, 'passed': 0}
+        try:
+            for id, item in self.data.items():
+                src = item.get('src', '')
+                dst = 'dolib' if src == 'fresh' else 'fresh'
+                dir = f'{src} => {dst}'
+                inn = item.get('company_inn', '')
+                name = item.get('company_name', '')
+                self.log.debug(f'company {name} {inn} "{src}" #{id} synchronising...')
+                company_duplicates = list(filter(lambda x: self.data[x].get('src', '') != item.get('src', '') and self.data[x].get('company_inn', '') == item.get('company_inn') and x != id, self.data.keys()))
+                if company_duplicates:
+                    self.log.warning(f'dublicates found: {company_duplicates}')
+                company_update = '' if len(company_duplicates) == 0 else self.data[company_duplicates[0]].get('company_internal_id', '')
+                contact_duplicates = list(filter(lambda x: self.data[x].get('src', '') != item.get('src', '') and self.data[x].get('contact_internal_id', '') == item.get('contact_internal_id') and x != id, self.data.keys()))
+                if contact_duplicates:
+                    self.log.warning(f'dublicates found: {contact_duplicates}')                    
+                contact_update = '' if len(contact_duplicates) == 0 else self.data[contact_duplicates[0]].get('contact_internal_id', '')
+                company_record_id, contact_record_id = self.db_dolib_write(item, company_update, contact_update) if dst == 'dolib' else self.db_fresh_write(item, company_update, contact_update)
+                if company_record_id and contact_record_id:
+                    self.state['sync'].update({dir: self.state['sync'].get(dir) + 1})
+                    self.log.debug(f'company {name} {inn} "{src}" #{id} {"UPDATED" if company_update else "CREATED"} in "{dst}": {company_record_id=}, {contact_record_id=}')            
+                else:
+                    self.state['sync'].update({'passed': self.state['sync'].get('passed') + 1})
+                    self.log.error(f'company {name} {inn} "{src}" #{id} {"UPDATED" if company_update else "CREATED"} in "{dst}" FAILED')
+                self.state['sync'].update({'total': self.state['sync'].get('total') + 1})
+                if not self.demo_output:
+                    time.sleep(self.sync_requests_delay)
+        except Exception as e:
+            self.log.error(str(e).replace('\n', ' '))
+        self.log.info(self.state)
 
 
 if __name__ == '__main__':
@@ -429,7 +416,5 @@ if __name__ == '__main__':
     fs.db_dolib_scan()
     fs.db_fresh_scan()
     fs.db_all_dumps()
-    fs.db_dolib_analize()
-    fs.db_fresh_analize()
     fs.db_all_sync()
     
